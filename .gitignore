@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Lokale Archivdaten und Medien
+WhatsAppArchive/
+*.db
+*.sqlite
+
+# Medien
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.mp4
+*.mov
+*.opus
+*.m4a
+*.mp3
+*.wav
+*.pdf
+
+# macOS
+.DS_Store
