@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -22,8 +23,10 @@ def import_chat_export(export_dir: Path | str, chat_name: str) -> Path:
     """
     Importiert einen entpackten WhatsApp-Export in das lokale Archiv.
 
-    Unterstützt flache Exporte (chat.txt und Medien auf einer Ebene)
-    sowie Exporte mit Media/-Unterordner.
+    Ordnername = eingegebener Chatname.
+    Erster Import  -> chat.txt
+    Zweiter Import -> chat_version_2.txt
+    Medien         -> immer in denselben Media/-Ordner
     """
 
     export_dir = Path(str(export_dir).strip().strip("'\"")).expanduser()
@@ -48,12 +51,7 @@ def import_chat_export(export_dir: Path | str, chat_name: str) -> Path:
     chats_root.mkdir(parents=True, exist_ok=True)
 
     chat_dir = get_or_create_chat_dir(chats_root, chat_name)
-    version_number = count_existing_versions(chat_dir)
-
-    if version_number == 0:
-        target_chat_file = chat_dir / CHAT_FILE_NAME
-    else:
-        target_chat_file = chat_dir / f"chat_version_{version_number + 1}.txt"
+    target_chat_file = next_chat_version_path(chat_dir)
 
     shutil.copy2(chat_file, target_chat_file)
 
@@ -74,12 +72,33 @@ def find_chat_file(export_dir: Path) -> Path | None:
         if candidate.is_file():
             return candidate
 
-    # Fallback: irgendeine .txt direkt im Export-Ordner
     for candidate in export_dir.glob("*.txt"):
         if candidate.is_file():
             return candidate
 
     return None
+
+
+def next_chat_version_path(chat_dir: Path) -> Path:
+    """
+    Liefert den nächsten freien Dateinamen für eine Chat-Version.
+
+    chat.txt existiert bereits? -> chat_version_2.txt
+    auch die?                  -> chat_version_3.txt usw.
+    """
+
+    base_file = chat_dir / CHAT_FILE_NAME
+
+    if not base_file.exists():
+        return base_file
+
+    version = 2
+
+    while True:
+        candidate = chat_dir / f"chat_version_{version}.txt"
+        if not candidate.exists():
+            return candidate
+        version += 1
 
 
 def import_media_files(
@@ -98,7 +117,6 @@ def import_media_files(
     for source_file in iter_media_candidates(export_dir, chat_file):
         relative_path = source_file.relative_to(export_dir)
 
-        # Media/, media/ usw. als oberste Ebene entfernen
         if relative_path.parts and relative_path.parts[0].lower() == "media":
             relative_path = Path(*relative_path.parts[1:])
 
@@ -137,76 +155,55 @@ def iter_media_candidates(export_dir: Path, chat_file: Path):
 
 
 def get_or_create_chat_dir(chats_root: Path, chat_name: str) -> Path:
-    """Findet einen bestehenden Chat oder legt einen neuen an."""
+    """Nutzt den eingegebenen Chatnamen als Ordnernamen."""
 
-    existing_chat_dir = find_existing_chat_dir(chats_root, chat_name)
-    if existing_chat_dir is not None:
-        return existing_chat_dir
+    folder_name = safe_folder_name(chat_name)
+    if not folder_name:
+        raise ImporterError(f"Ungültiger Chatname: {chat_name!r}")
 
-    next_id = get_next_chat_id(chats_root)
-    chat_dir = chats_root / f"chat_{next_id}"
-    chat_dir.mkdir(parents=True, exist_ok=True)
+    chat_dir = chats_root / folder_name
+
+    if chat_dir.is_dir():
+        return chat_dir
+
+    chat_dir.mkdir(parents=True)
 
     chat_name_file = chat_dir / "chat_name.txt"
-    chat_name_file.write_text(chat_name, encoding="utf-8")
+    chat_name_file.write_text(chat_name.strip(), encoding="utf-8")
 
     return chat_dir
 
 
-def find_existing_chat_dir(chats_root: Path, chat_name: str) -> Path | None:
-    """Vergleicht Chatnamen unabhängig von Groß-/Kleinschreibung."""
+def safe_folder_name(chat_name: str) -> str:
+    """
+    Macht aus einem Chatnamen einen gültigen Ordnernamen.
 
-    normalized_input = normalize_chat_name(chat_name)
+    Entfernt pfadkritische Zeichen und gibt bei Bedarf einen
+    eindeutigen Namen zurück, falls der Ordner schon existiert.
+    """
 
-    for chat_dir in chats_root.iterdir():
-        if not chat_dir.is_dir():
-            continue
+    name = chat_name.strip()
+    name = re.sub(r"[/:\\]", "-", name)
+    name = name.strip(". ")
 
-        chat_name_file = chat_dir / "chat_name.txt"
-        if not chat_name_file.is_file():
-            continue
+    if not name:
+        return ""
 
-        stored_name = chat_name_file.read_text(encoding="utf-8").strip()
-
-        if normalize_chat_name(stored_name) == normalized_input:
-            return chat_dir
-
-    return None
-
-
-def normalize_chat_name(value: str) -> str:
-    """Macht 'Theresa Rosenbaum' und 'theresa rosenbaum' vergleichbar."""
-
-    return " ".join(value.casefold().split())
-
-
-def get_next_chat_id(chats_root: Path) -> int:
-    """Ermittelt die nächste freie chat_-Nummer."""
-
-    highest_id = 0
-
-    for chat_dir in chats_root.iterdir():
-        if not chat_dir.is_dir():
-            continue
-
-        if not chat_dir.name.startswith("chat_"):
-            continue
-
-        suffix = chat_dir.name.removeprefix("chat_")
-
-        if suffix.isdigit():
-            highest_id = max(highest_id, int(suffix))
-
-    return highest_id + 1
+    return name
 
 
 def count_existing_versions(chat_dir: Path) -> int:
-    """Zählt vorhandene chat_version_-Dateien."""
+    """Zählt chat.txt plus alle chat_version_-Dateien."""
 
     count = 0
 
-    for path in chat_dir.iterdir():
-        if path.is_file() and path.name.startswith("chat_version_"):
-            count += 1
+    if (chat_dir / CHAT_FILE_NAME).is_file():
+        count += 1
+
+    count += sum(
+        1
+        for path in chat_dir.glob("chat_version_*.txt")
+        if path.is_file()
+    )
 
     return count
