@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
-from tkinter import Tk, filedialog
 
 from app.config import ARCHIVE_ROOT
 from app.importer import import_chat_export
@@ -27,38 +27,64 @@ def main() -> None:
         return
 
     try:
-        chat_dir = import_chat_export(export_dir, chat_name)
+        result = import_chat_export(export_dir, chat_name)
     except Exception as error:
         print(f"Fehler: {error}")
         return
 
     print()
     print("Import abgeschlossen.")
-    print(f"Chat-Ordner: {chat_dir}")
-    print_chat_summary(chat_dir)
+    print(f"Chat-Ordner:      {result.chat_dir}")
+    print(f"Neue Textdatei:   {result.imported_file.name}")
+    print(f"Textversionen:    {result.version_count}")
+
+    if result.merge_result is None:
+        print("Merge:            noch nicht nötig (nur eine Version)")
+    else:
+        print(f"Merge-Datei:      {result.merged_file.name}")
+        print(f"Nachrichten:      {result.merge_result.total_messages}")
+        print(f"Eindeutig:        {result.merge_result.unique_messages}")
+        print(f"Duplikate:        {result.merge_result.duplicates_removed}")
+
+    print_chat_summary(result.chat_dir)
 
 
 def choose_export_folder() -> Path | None:
-    """Öffnet einen macOS-Ordnerdialog und gibt den Pfad zurück."""
+    """Öffnet den nativen macOS-Ordnerdialog über AppleScript."""
 
-    root = Tk()
-    root.withdraw()
-    root.update()
-
-    selected = filedialog.askdirectory(
-        title="Entpackten WhatsApp-Export-Ordner auswählen",
-        mustexist=True,
+    script = (
+        'POSIX path of (choose folder with prompt '
+        '"Entpackten WhatsApp-Export-Ordner auswählen")'
     )
 
-    root.destroy()
+    try:
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return ask_path_manually()
 
+    if completed.returncode != 0:
+        return None
+
+    selected = completed.stdout.strip()
     return Path(selected) if selected else None
 
 
-def print_chat_summary(chat_dir: Path) -> None:
-    """Zeigt an, welche Textdateien und wie viele Medien importiert wurden."""
+def ask_path_manually() -> Path | None:
+    raw = input("Pfad zum Export-Ordner: ").strip()
+    if not raw:
+        return None
 
-    chat_files = sorted(chat_dir.glob("chat*.txt"))
+    return Path(raw.strip("'\"")).expanduser()
+
+
+def print_chat_summary(chat_dir: Path) -> None:
+    """Zeigt Textdateien und Anzahl der Mediendateien."""
+
+    text_files = sorted(chat_dir.glob("chat*.txt")) + sorted(chat_dir.glob("merged_*.txt"))
     media_dir = chat_dir / "Media"
 
     media_count = 0
@@ -67,9 +93,9 @@ def print_chat_summary(chat_dir: Path) -> None:
 
     print()
     print("Übersicht:")
-    for path in chat_files:
+    for path in text_files:
         print(f"  Text:   {path.name}")
-    print(f"  Medien: {media_count} Datei(en) in {media_dir}")
+    print(f"  Medien: {media_count} Datei(en)")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import (
@@ -10,6 +11,7 @@ from app.config import (
     CHATS_DIR_NAME,
     MEDIA_DIR_NAME,
 )
+from app.merger import MergeError, MergeResult, merge_chat_versions
 
 CHAT_FILE_NAMES = {"chat.txt", "_chat.txt"}
 IGNORED_SUFFIXES = {".zip", ".txt"}
@@ -19,14 +21,24 @@ class ImporterError(Exception):
     """Wird ausgelöst, wenn ein Export nicht importiert werden kann."""
 
 
-def import_chat_export(export_dir: Path | str, chat_name: str) -> Path:
+@dataclass
+class ImportResult:
+    chat_dir: Path
+    imported_file: Path
+    version_count: int
+    merge_result: MergeResult | None
+
+    @property
+    def merged_file(self) -> Path | None:
+        return self.merge_result.merged_file if self.merge_result else None
+
+
+def import_chat_export(export_dir: Path | str, chat_name: str) -> ImportResult:
     """
     Importiert einen entpackten WhatsApp-Export in das lokale Archiv.
 
-    Ordnername = eingegebener Chatname.
-    Erster Import  -> chat.txt
-    Zweiter Import -> chat_version_2.txt
-    Medien         -> immer in denselben Media/-Ordner
+    Liegt danach mehr als eine Textversion vor, wird automatisch
+    eine merged_...txt erzeugt.
     """
 
     export_dir = Path(str(export_dir).strip().strip("'\"")).expanduser()
@@ -61,7 +73,27 @@ def import_chat_export(export_dir: Path | str, chat_name: str) -> Path:
         target_media_dir=chat_dir / MEDIA_DIR_NAME,
     )
 
-    return chat_dir
+    version_count = count_existing_versions(chat_dir)
+    merge_result = merge_if_possible(chat_dir, version_count)
+
+    return ImportResult(
+        chat_dir=chat_dir,
+        imported_file=target_chat_file,
+        version_count=version_count,
+        merge_result=merge_result,
+    )
+
+
+def merge_if_possible(chat_dir: Path, version_count: int) -> MergeResult | None:
+    """Mergt automatisch, sobald mindestens zwei Versionen existieren."""
+
+    if version_count < 2:
+        return None
+
+    try:
+        return merge_chat_versions(chat_dir)
+    except MergeError:
+        return None
 
 
 def find_chat_file(export_dir: Path) -> Path | None:
@@ -106,11 +138,7 @@ def import_media_files(
     chat_file: Path,
     target_media_dir: Path,
 ) -> None:
-    """
-    Kopiert alle Mediendateien aus dem Export in den einen Media-Ordner.
-
-    Vorhandene Dateien werden nicht überschrieben.
-    """
+    """Kopiert neue Medien in den einen Media-Ordner des Chats."""
 
     target_media_dir.mkdir(parents=True, exist_ok=True)
 
@@ -175,19 +203,11 @@ def get_or_create_chat_dir(chats_root: Path, chat_name: str) -> Path:
 
 
 def safe_folder_name(chat_name: str) -> str:
-    """
-    Macht aus einem Chatnamen einen gültigen Ordnernamen.
-
-    Entfernt pfadkritische Zeichen und gibt bei Bedarf einen
-    eindeutigen Namen zurück, falls der Ordner schon existiert.
-    """
+    """Macht aus einem Chatnamen einen gültigen Ordnernamen."""
 
     name = chat_name.strip()
     name = re.sub(r"[/:\\]", "-", name)
     name = name.strip(". ")
-
-    if not name:
-        return ""
 
     return name
 
