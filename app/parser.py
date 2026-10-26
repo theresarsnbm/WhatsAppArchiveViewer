@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-# Beispiel: [05.12.24, 10:18:05] Theresa Rosenbaum: Text
 MESSAGE_START = re.compile(
     r"^\[(?P<day>\d{2})\.(?P<month>\d{2})\.(?P<year>\d{2}), "
     r"(?P<time>\d{2}:\d{2}:\d{2})\] "
@@ -13,10 +12,8 @@ MESSAGE_START = re.compile(
     r"(?P<body>.*)$"
 )
 
-# Beispiel: <Anhang: 00000002-PHOTO-2024-12-05-10-18-05.jpg>
 ATTACHMENT = re.compile(r"<Anhang:\s*(?P<filename>.+?)>")
 
-# Unsichtbare Steuerzeichen, die WhatsApp-Exporte enthalten
 INVISIBLE_CHARS = {"\u200e", "\u200f", "\ufeff"}
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".gif", ".webp"}
@@ -27,8 +24,6 @@ DOCUMENT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
 
 @dataclass
 class Attachment:
-    """Eine Mediendatei, die in einer Nachricht referenziert wird."""
-
     filename: str
     path: Path | None
     kind: str
@@ -40,17 +35,16 @@ class Attachment:
 
 @dataclass
 class Message:
-    """Eine einzelne Chat-Nachricht."""
-
     timestamp: datetime
     sender: str
     text: str
     source_file: Path
     attachments: list[Attachment] = field(default_factory=list)
+    is_own: bool = False
 
     @property
     def is_own_message(self) -> bool:
-        return self.sender == "Du"
+        return self.is_own
 
     @property
     def has_media(self) -> bool:
@@ -58,17 +52,39 @@ class Message:
 
 
 def clean_text(value: str) -> str:
-    """Entfernt unsichtbare Zeichen und Rand-Leerzeichen."""
-
     for char in INVISIBLE_CHARS:
         value = value.replace(char, "")
 
     return value.strip()
 
 
-def detect_kind(filename: str) -> str:
-    """Bestimmt den Medientyp anhand der Dateiendung."""
+def normalize_sender(value: str) -> str:
+    """Absendernamen vergleichbar machen: Leerzeichen und Groß-/Kleinschreibung."""
 
+    return " ".join(value.split()).casefold()
+
+
+def build_own_name_set(
+    own_names: str | list[str] | tuple[str, ...] | None,
+) -> set[str]:
+    """Erzeugt die Menge aller Schreibweisen eigener Nachrichten."""
+
+    if own_names is None:
+        values = ["Du"]
+    elif isinstance(own_names, str):
+        values = [own_names]
+    else:
+        values = list(own_names)
+
+    normalized = {
+        normalize_sender(value) for value in values if value and value.strip()
+    }
+    normalized.add("du")
+
+    return normalized
+
+
+def detect_kind(filename: str) -> str:
     suffix = Path(filename).suffix.lower()
 
     if suffix in IMAGE_SUFFIXES:
@@ -83,17 +99,14 @@ def detect_kind(filename: str) -> str:
     return "file"
 
 
-def parse_chat_file(chat_path: Path) -> list[Message]:
-    """
-    Liest eine WhatsApp-Textdatei und gibt alle Nachrichten zurück.
-
-    Mehrzeilige Nachrichten werden zusammengeführt: Eine neue Nachricht
-    beginnt erst wieder mit einem Zeitstempel am Zeilenanfang.
-    """
-
+def parse_chat_file(
+    chat_path: Path,
+    own_names: str | list[str] | tuple[str, ...] | None = None,
+) -> list[Message]:
     if not chat_path.is_file():
         raise FileNotFoundError(f"Chat-Datei nicht gefunden: {chat_path}")
 
+    own_set = build_own_name_set(own_names)
     messages: list[Message] = []
     current: Message | None = None
 
@@ -111,12 +124,14 @@ def parse_chat_file(chat_path: Path) -> list[Message]:
                     f"{match['time']}",
                     "%d.%m.%y %H:%M:%S",
                 )
+                sender = match["sender"].strip()
 
                 current = Message(
                     timestamp=timestamp,
-                    sender=match["sender"].strip(),
+                    sender=sender,
                     text="",
                     source_file=chat_path,
+                    is_own=normalize_sender(sender) in own_set,
                 )
                 body = match["body"]
             else:
@@ -138,8 +153,6 @@ def parse_chat_file(chat_path: Path) -> list[Message]:
 
 
 def extract_attachments(text: str, chat_dir: Path) -> list[Attachment]:
-    """Sucht Anhangsverweise im Nachrichtentext und ordnet Dateien zu."""
-
     attachments: list[Attachment] = []
 
     for match in ATTACHMENT.finditer(text):
@@ -147,24 +160,13 @@ def extract_attachments(text: str, chat_dir: Path) -> list[Attachment]:
         path = find_media_file(filename, chat_dir)
 
         attachments.append(
-            Attachment(
-                filename=filename,
-                path=path,
-                kind=detect_kind(filename),
-            )
+            Attachment(filename=filename, path=path, kind=detect_kind(filename))
         )
 
     return attachments
 
 
 def find_media_file(filename: str, chat_dir: Path) -> Path | None:
-    """
-    Sucht eine Mediendatei im Chat-Ordner.
-
-    Reihenfolge: Media/ -> media/ -> direkt im Chat-Ordner,
-    danach als Sicherheitsnetz irgendwo im Chat-Ordner.
-    """
-
     candidates = [
         chat_dir / "Media" / filename,
         chat_dir / "media" / filename,

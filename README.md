@@ -1,214 +1,192 @@
 # WhatsApp Archive Viewer
 
-Lokale Anwendung zum Anzeigen exportierter WhatsApp-Chats. Die App liest die
-Exportordner ein, legt sie in einem eigenen Archiv ab und führt mehrere
-Versionen desselben Chats zu einer chronologischen Ansicht zusammen.
+Lokales Archiv für WhatsApp-Chat-Exporte: Exporte einlesen, mehrere Versionen
+eines Chats zu einer durchsuchbaren Textdatei zusammenführen und die Chats
+anschließend in einer Desktop-Oberfläche lesen.
 
-Alles bleibt lokal: keine Cloud, keine Datenbank, keine Netzwerkverbindung.
+Alles läuft offline auf dem eigenen Rechner. Es gibt keinen Server, keinen
+Upload und keine Cloud-Anbindung.
 
-## Funktionen
+Lizenz: MIT (siehe [LICENSE](LICENSE)).
 
-- Import eines entpackten WhatsApp-Exports (`chat.txt` + Medien auf einer Ebene)
-- Automatische Erkennung, ob es sich um eine neue Version eines bestehenden Chats handelt
-- Medien werden anhand ihres Dateinamens abgeglichen; nur neue Dateien werden kopiert
-- Textversionen bleiben vollständig erhalten (`chat.txt`, `chat_version_2.txt`, ...)
-- Automatischer Merge ab zwei Versionen in eine `merged_...txt`
-- Deduplizierung über Zeitstempel, Absender, Text und Anhangsnamen
-- Konfigurierbarer Archivpfad, gespeichert im Benutzerprofil
-- Konsolen-Interface (GUI in Arbeit)
+## Status
+
+| Bereich | Stand |
+|---|---|
+| Einstellungen (Archivpfad, Speicherort) | fertig |
+| Import von Export-Ordnern inkl. Medien | fertig |
+| Parser für das WhatsApp-Textformat | fertig |
+| Zusammenführen mehrerer Export-Versionen | fertig |
+| CLI zum Importieren | fertig |
+| Grafische Oberfläche (Chatliste, Verlauf) | geplant |
+| Suche im aktuellen Chat | geplant |
+| Kalender zum Springen auf Tage | geplant |
+| Bilderübersicht pro Chat | geplant |
+
+Bis die Oberfläche fertig ist, ist das Projekt ein Kommandozeilen-Werkzeug, das
+eine saubere Archivstruktur erzeugt.
 
 ## Voraussetzungen
 
-- Python 3.11 oder neuer (entwickelt mit Python 3.14)
-- macOS oder Windows
-- Für die spätere GUI: PySide6
+- Python 3.11 oder neuer (wegen `Path.is_relative_to` und `removeprefix`)
+- Ein entpackter WhatsApp-Export (der Ordner mit `chat.txt` und `Media/`)
+- Keine externen Abhängigkeiten für Import und Merge
 
 ## Installation
 
 ```bash
-git clone https://github.com/<DEIN-NAME>/WhatsAppArchiveViewer.git
-cd WhatsAppArchiveViewer
-
+git clone <repository-url>
+cd whatsapp-archive-viewer
 python3 -m venv .venv
-source .venv/bin/activate        # macOS
-# .venv\Scripts\activate         # Windows
-
-python -m pip install -U pip
-python -m pip install -r requirements.txt
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
 ```
 
-`requirements.txt` ist aktuell leer, weil Import, Parser und Merge ausschließlich
-die Python-Standardbibliothek nutzen.
+Der Import läuft direkt aus dem Projektordner, eine Installation als Paket ist
+nicht nötig.
 
-## Nutzung
+## Import benutzen
 
 ```bash
 python -m app.cli
 ```
 
-Ablauf:
+Der Ablauf ist bewusst dialoggeführt:
 
-1. Das Programm zeigt den aktuellen Archivpfad an.
-2. Optional lässt sich ein neuer Archivordner wählen.
-3. Danach öffnet sich der native Ordnerdialog für den entpackten Export.
-4. Chatnamen eingeben.
-5. Der Import läuft, bei mehreren Versionen wird automatisch gemergt.
+1. Der aktuelle Archivordner wird angezeigt; er kann geändert oder auf den
+   Standard zurückgesetzt werden.
+2. Ein nativer Ordnerdialog öffnet sich zur Auswahl des entpackten Exports.
+3. Der Chatname wird abgefragt.
+4. Der Import kopiert `chat.txt` und alle Mediendateien ins Archiv.
+5. Ab der zweiten Version eines Chats wird automatisch zusammengeführt.
 
-Beispielausgabe:
+Beim Zusammenführen gilt:
 
-```text
-Import abgeschlossen.
-Chat-Ordner:    /Users/theresa/WhatsAppArchive/chats/Theresa
-Neue Textdatei: chat_version_2.txt
-Versionen:      2
-Merge-Datei:    merged_2026-10-26_19-40-00.txt
-Nachrichten:    118
-Duplikate:      22
-```
+- Nachrichten werden nach Zeitstempel sortiert.
+- Identische Nachrichten aus mehreren Exporten erscheinen nur einmal. Gleich
+  heißt: gleicher Zeitstempel, gleicher Absender, gleicher Text und gleiche
+  Anhangsdateinamen.
+- Die Originaldateien bleiben unverändert erhalten; es entsteht zusätzlich eine
+  Datei `merged_JJJJ-MM-TT_HH-MM-SS.txt`.
+
+Kopiert werden nur echte Mediendateien; `chat.txt`, ZIP-Dateien und
+`__MACOSX`-Reste werden übersprungen.
 
 ## Archivstruktur
 
-```text
+```
 WhatsAppArchive/
-└─ chats/
-   └─ Theresa/
-      ├─ chat_name.txt
-      ├─ chat.txt
-      ├─ chat_version_2.txt
-      ├─ merged_2026-10-26_19-40-00.txt
-      └─ Media/
-         ├─ 00000002-PHOTO-2024-12-05-10-18-05.jpg
-         ├─ 00000025-Spicker2.pdf
-         ├─ 00000053-AUDIO-2026-08-28-22-52-36.opus
-         └─ 00000056-VIDEO-2026-10-25-17-37-50.mp4
+└── chats/
+    └── Chatname/
+        ├── chat_name.txt          # ursprünglicher Chatname
+        ├── chat.txt               # erste importierte Version
+        ├── chat_version_2.txt     # weitere Exporte
+        ├── merged_2026-01-14_10-00-00.txt
+        └── Media/
+            └── 00000002-PHOTO-2025-06-01-12-00-00.jpg
 ```
 
-- `chat.txt` ist die erste importierte Version.
-- `chat_version_N.txt` sind weitere Importe desselben Chats.
-- `merged_*.txt` ist die zusammengeführte Anzeigedatei mit Zeitstempel im Namen.
-- `Media/` ist der einzige Medienordner des Chats. Neue Dateien werden ergänzt,
-  vorhandene Dateinamen nicht überschrieben.
+Der Chatordner wird aus dem Chatnamen erzeugt und dabei plattformneutral
+bereinigt: unzulässige Zeichen werden ersetzt, Windows-Gerätenamen wie `CON`
+entschärft und die Länge auf 80 Zeichen begrenzt. Groß- und Kleinschreibung
+wird beim Wiederfinden ignoriert, damit macOS und Windows sich gleich verhalten.
 
-Die Originaldateien werden nie verändert.
+## Einstellungen
 
-## Unterstütztes Exportformat
-
-Die App erwartet das Textformat, das WhatsApp beim Export erzeugt:
-
-```text
-[05.12.24, 10:18:05] Du: Nachricht
-[05.12.24, 10:18:05] Theresa Rosenbaum: <Anhang: 00000002-PHOTO-2024-12-05-10-18-05.jpg>
-```
-
-Mehrzeilige Nachrichten werden korrekt zusammengeführt, unsichtbare
-Steuerzeichen (U+200E, U+200F, BOM) werden entfernt. Anhänge werden über den
-Dateinamen in `Media/` aufgelöst; fehlende Dateien führen nicht zum Absturz,
-sondern werden als nicht vorhanden markiert.
-
-## Merge-Verhalten
-
-Ein Merge läuft automatisch, sobald mindestens zwei Textversionen vorliegen.
-Zwei Nachrichten gelten als identisch, wenn alle vier Merkmale übereinstimmen:
-
-1. Zeitstempel
-2. Absender (ohne Groß-/Kleinschreibung)
-3. Text mit normalisierten Leerzeichen
-4. sortierte Liste der Anhangsdateinamen
-
-Der Merge schreibt immer eine neue Datei und überschreibt keine bestehende.
-Mehrfaches Mergen erzeugt entsprechend mehrere `merged_*.txt` mit
-unterschiedlichen Zeitstempeln.
-
-## Archivpfad ändern
-
-Der Pfad wird nicht im Code hinterlegt, sondern in einer Einstellungsdatei:
+Einstellungen liegen nicht im Projektordner, sondern im Konfigurationsordner des
+Benutzers:
 
 - macOS: `~/Library/Application Support/WhatsAppArchiveViewer/settings.json`
 - Windows: `%APPDATA%\WhatsAppArchiveViewer\settings.json`
+- Linux: `~/.config/WhatsAppArchiveViewer/settings.json`
+
+Gespeichert wird dort nur der Archivpfad:
 
 ```json
 {
-  "archive_root": "/Volumes/WhatsApp/WhatsAppArchive"
+  "archive_root": "/Users/benutzer/WhatsAppArchive"
 }
 ```
 
-Priorität beim Laden:
+Der aktuelle Archivpfad ergibt sich in dieser Reihenfolge:
 
 1. Umgebungsvariable `WA_ARCHIVE_ROOT`
 2. gespeicherte Einstellung
 3. Standardordner `~/WhatsAppArchive`
 
-Beim Ändern des Pfads werden vorhandene Chats **nicht** verschoben, es wird nur
-der neue Ablageort gespeichert.
+Ohne Einstellungsdatei startet das Programm also mit sinnvollen Vorgaben. Die
+Datei wird atomar geschrieben, damit ein Abbruch keine halbe Datei hinterlässt.
+
+## Geplante Oberfläche
+
+Die Oberfläche wird mit Qt (PySide6) umgesetzt und besteht aus einer Chatliste
+links und dem Chatverlauf rechts. Suche, Kalender und Medienübersicht sitzen in
+der Kopfzeile des jeweils geöffneten Chats, nicht in einer globalen Seitenleiste.
+
+- **Suche:** durchsucht ausschließlich den aktuellen Chat, zeigt Trefferzähler
+  und springt per Tastatur von Treffer zu Treffer. Der Verlauf bleibt dabei
+  vollständig sichtbar.
+- **Kalender:** ausklappbar, markiert alle Tage mit Nachrichten und springt beim
+  Klick auf die erste Nachricht dieses Tages.
+- **Bilderübersicht:** Raster der Bilder eines Chats, gruppiert nach Monaten,
+  mit Sprung zur zugehörigen Nachricht.
+
+Eigene Absendernamen werden in den Einstellungen gepflegt, nicht im Quellcode.
 
 ## Projektstruktur
 
-```text
-WhatsAppArchiveViewer/
-├─ app/
-│  ├─ config.py      Konstanten (Ordnernamen, Limits)
-│  ├─ settings.py    Archivpfad und Persistenz
-│  ├─ archive.py     Chats aus dem Archiv einlesen
-│  ├─ parser.py      chat.txt -> Message-Objekte
-│  ├─ merger.py      Versionen zusammenführen und deduplizieren
-│  ├─ importer.py    Import inklusive Auto-Merge
-│  ├─ cli.py         Konsolen-Einstieg
-│  └─ ui/            GUI (folgt)
-├─ tests/
-├─ .gitignore
-├─ LICENSE
-├─ THIRD_PARTY_NOTICES.md
-└─ requirements.txt
+```
+app/
+├── config.py      # Konstanten: Ordnernamen, Standardpfade
+├── settings.py    # Laden und Speichern der Benutzereinstellungen
+├── parser.py      # WhatsApp-Textformat, Anhänge, Medientypen
+├── archive.py     # Chats auflisten und einlesen
+├── importer.py    # Exporte ins Archiv kopieren
+├── merger.py      # Versionen zusammenführen und Duplikate entfernen
+└── cli.py         # Kommandozeilen-Ablauf
 ```
 
-Die Logik ist bewusst frei von GUI-Abhängigkeiten: Parser, Merge und Import
-lassen sich ohne Display testen.
+## Bekannte Grenzen
 
-## Tests
+- Das Textformat wird zeilenweise erkannt; Systemmeldungen und Umfragen werden
+  als normale Nachrichten behandelt.
+- Verschlüsselte oder beschädigte Mediendateien werden nicht repariert, sondern
+  beim Lesen als fehlend gemeldet.
+- Zeitstempel werden ohne Zeitzoneninformation gelesen.
+- Es gibt noch keine automatisierten Tests.
 
-```bash
-python -c "import app.cli, app.importer, app.merger, app.archive, app.parser, app.settings; print('Imports ok')"
+## Was nicht ins Repository gehört
+
+Persönliche Daten bleiben lokal. Ausgeschlossen sind:
+
+```gitignore
+# Persönliche Einstellungen
+settings.json
+
+# Archivdaten und Exporte
+WhatsAppArchive/
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+.venv/
 ```
 
-```bash
-python - <<'PY'
-from app.archive import list_chats
-from app.parser import parse_chat_file
-
-for entry in list_chats():
-    messages = parse_chat_file(entry.display_file)
-    missing = sum(
-        1
-        for message in messages
-        for attachment in message.attachments
-        if not attachment.exists
-    )
-    print(f"{entry.name}: {len(messages)} Nachrichten, {missing} fehlende Medien")
-PY
-```
-
-## Roadmap
-
-- [x] Import einzelner Exporte
-- [x] Versionierung und automatischer Merge
-- [x] Plattformneutraler Archivpfad
-- [ ] GUI mit Chatliste und Nachrichtenansicht
-- [ ] Medienvorschau für Bilder, Videos, Audio und PDF
-- [ ] Volltextsuche
-- [ ] macOS-Bundle via PyInstaller
-
-## Datenschutz
-
-Chats und Medien verlassen den Rechner nicht. Es gibt keine Synchronisation und
-keine Telemetrie. Das Archivverzeichnis ist in `.gitignore` eingetragen und
-sollte nie in ein Repository gelangen.
+Wichtig: Eine Zeile in `.gitignore` wirkt nur auf noch nicht erfasste Dateien.
+Bereits versionierte Dateien müssen zusätzlich mit `git rm --cached <datei>`
+aus dem Index genommen werden; Inhalte aus früheren Commits verschwinden dadurch
+nicht. Beispiele in Code, Tests und Dokumentation verwenden neutrale Namen wie
+`Vorname Nachname`.
 
 ## Lizenz
 
-Der eigene Code steht unter der MIT-Lizenz, siehe [LICENSE](LICENSE).
-Verwendete Fremdbibliotheken und ihre Lizenzen sind in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) dokumentiert.
+Dieses Projekt steht unter der MIT-Lizenz. Der vollständige Lizenztext liegt in
+der Datei [LICENSE](LICENSE).
 
-Diese Anwendung verwendet Qt for Python (PySide6) unter LGPLv3. GPL-only-Module
-wie Qt Charts, Qt Data Visualization oder Qt Virtual Keyboard werden nicht
-verwendet.
+Kurz zusammengefasst: Nutzung, Veränderung und Weitergabe sind erlaubt, auch
+kommerziell und auch in veränderter Form. Bedingung ist, dass der
+Copyright-Hinweis und der Lizenztext in Kopien oder wesentlichen Teilen erhalten
+bleiben. Es gibt keine Gewährleistung und keine Haftung.
+
+Beim Weiterverwenden empfiehlt es sich, den Copyright-Hinweis in der `LICENSE`
+auf das eigene Jahr und den eigenen Namen anzupassen.

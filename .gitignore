@@ -25,3 +25,7 @@ WhatsAppArchive/
 
 # macOS
 .DS_Store
+
+# Persönliche Einstellungen und lokale Archivdaten
+settings.json
+WhatsAppArchive/

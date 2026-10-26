@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import CHAT_FILE_NAME
-from app.parser import parse_chat_file, Message
+from app.parser import parse_chat_file, Message, normalize_sender
+from app.settings import get_own_names
 
 
 @dataclass
@@ -21,15 +22,10 @@ class MergeError(Exception):
     """Wird ausgelöst, wenn nicht gemergt werden kann."""
 
 
-def merge_chat_versions(chat_dir: Path) -> MergeResult:
-    """
-    Fasst alle Textversionen eines Chat-Ordners zu einer merged_...txt zusammen.
+def merge_chat_versions(chat_dir: Path, own_names=None) -> MergeResult:
+    """Fasst alle Textversionen eines Chat-Ordners zu einer merged_...txt zusammen."""
 
-    - Nachrichten werden nach Zeitstempel sortiert.
-    - Identische Nachrichten aus mehreren Exporten werden nur einmal übernommen.
-    - Die Originaldateien bleiben unverändert.
-    """
-
+    own_names = own_names or get_own_names()
     version_files = collect_chat_files(chat_dir)
 
     if len(version_files) < 2:
@@ -41,7 +37,7 @@ def merge_chat_versions(chat_dir: Path) -> MergeResult:
     all_messages: list[Message] = []
 
     for chat_file in version_files:
-        all_messages.extend(parse_chat_file(chat_file))
+        all_messages.extend(parse_chat_file(chat_file, own_names=own_names))
 
     total_messages = len(all_messages)
     unique = deduplicate_messages(all_messages)
@@ -115,12 +111,10 @@ def message_key(message: Message) -> tuple:
         sorted(attachment.filename.casefold() for attachment in message.attachments)
     )
 
-    return (
-        message.timestamp,
-        message.sender.casefold().strip(),
-        normalized_text,
-        attachment_names,
-    )
+    # Eigene Nachrichten unabhängig von der Schreibweise als "self" behandeln
+    sender_key = "self" if message.is_own_message else normalize_sender(message.sender)
+
+    return (message.timestamp, sender_key, normalized_text, attachment_names)
 
 
 def next_merged_path(chat_dir: Path) -> Path:

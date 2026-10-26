@@ -11,12 +11,15 @@ SETTINGS_FILE_NAME = "settings.json"
 
 ENV_ARCHIVE_ROOT = "WA_ARCHIVE_ROOT"
 
+DEFAULT_OWN_NAMES = ["Du"]
+
 
 @dataclass
 class Settings:
     """Dauerhaft gespeicherte Einstellungen der App."""
 
     archive_root: str | None = None
+    own_names: list[str] | None = None
 
 
 def config_dir() -> Path:
@@ -54,15 +57,27 @@ def load_settings() -> Settings:
         return Settings()
 
     archive_root = data.get("archive_root")
+    if not isinstance(archive_root, str) or not archive_root.strip():
+        archive_root = None
 
-    if isinstance(archive_root, str) and archive_root.strip():
-        return Settings(archive_root=archive_root)
+    own_names = data.get("own_names")
+    if isinstance(own_names, list):
+        own_names = [
+            str(name).strip() for name in own_names if str(name).strip()
+        ] or None
+    else:
+        own_names = None
 
-    return Settings()
+    # Migration: altes Einzelfeld own_name übernehmen
+    legacy = data.get("own_name")
+    if not own_names and isinstance(legacy, str) and legacy.strip():
+        own_names = [legacy.strip()]
+
+    return Settings(archive_root=archive_root, own_names=own_names)
 
 
 def save_settings(settings: Settings) -> None:
-    """Schreibt die Einstellungen atomar, damit nichts halb Geschriebenes bleibt."""
+    """Schreibt die Einstellungen atomar."""
 
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,7 +95,7 @@ def get_archive_root() -> Path:
     Liefert den aktuell gültigen Archivpfad.
 
     Reihenfolge:
-    1. Umgebungsvariable WA_ARCHIVE_ROOT (für Tests und Sonderfälle)
+    1. Umgebungsvariable WA_ARCHIVE_ROOT
     2. gespeicherte Einstellung
     3. Standardordner im Benutzerverzeichnis
     """
@@ -125,3 +140,47 @@ def reset_archive_root() -> Path:
 
 def archive_root_exists() -> bool:
     return get_archive_root().is_dir()
+
+
+def get_own_names() -> list[str]:
+    """Alle Schreibweisen, unter denen eigene Nachrichten erscheinen können."""
+
+    names = load_settings().own_names or list(DEFAULT_OWN_NAMES)
+    cleaned = [" ".join(name.split()) for name in names if name and name.strip()]
+
+    return cleaned or list(DEFAULT_OWN_NAMES)
+
+
+def set_own_names(names: list[str]) -> list[str]:
+    """Speichert die eigenen Namen ohne Duplikate."""
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+
+    for name in names:
+        value = " ".join(str(name).split())
+
+        if not value:
+            continue
+
+        key = value.casefold()
+        if key in seen:
+            continue
+
+        seen.add(key)
+        cleaned.append(value)
+
+    if not cleaned:
+        raise ValueError("Mindestens ein eigener Name ist erforderlich.")
+
+    settings = load_settings()
+    settings.own_names = cleaned
+    save_settings(settings)
+
+    return cleaned
+
+
+def get_own_name() -> str:
+    """Kompatibilität für ältere Aufrufe: erster eigener Name."""
+
+    return get_own_names()[0]
