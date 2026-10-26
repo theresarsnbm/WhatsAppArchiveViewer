@@ -5,8 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import CHAT_FILE_NAME
-from app.parser import parse_chat_file
-from app.models import Message
+from app.parser import parse_chat_file, Message
 
 
 @dataclass

@@ -2,19 +2,30 @@ from __future__ import annotations
 
 import re
 import shutil
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import (
-    ARCHIVE_ROOT,
     CHAT_FILE_NAME,
     CHATS_DIR_NAME,
+    MAX_FOLDER_NAME_LENGTH,
     MEDIA_DIR_NAME,
 )
 from app.merger import MergeError, MergeResult, merge_chat_versions
+from app.settings import get_archive_root
 
 CHAT_FILE_NAMES = {"chat.txt", "_chat.txt"}
 IGNORED_SUFFIXES = {".zip", ".txt"}
+
+# Unter Windows verboten: < > : " / \ | ? * und Steuerzeichen
+INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+RESERVED_WINDOWS_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 class ImporterError(Exception):
@@ -34,20 +45,16 @@ class ImportResult:
 
 
 def import_chat_export(export_dir: Path | str, chat_name: str) -> ImportResult:
-    """
-    Importiert einen entpackten WhatsApp-Export in das lokale Archiv.
-
-    Liegt danach mehr als eine Textversion vor, wird automatisch
-    eine merged_...txt erzeugt.
-    """
+    """Importiert einen Export und mergt automatisch ab zwei Versionen."""
 
     export_dir = Path(str(export_dir).strip().strip("'\"")).expanduser()
+    export_dir = Path(unicodedata.normalize("NFC", str(export_dir)))
 
     if not export_dir.is_dir():
         raise ImporterError(f"Export-Ordner nicht gefunden: {export_dir}")
 
-    archive_root = Path(ARCHIVE_ROOT).expanduser()
-    if export_dir.resolve().is_relative_to(archive_root.resolve()):
+    archive_root = get_archive_root().resolve()
+    if export_dir.resolve().is_relative_to(archive_root):
         raise ImporterError(
             "Der Export-Ordner liegt innerhalb des Archivs. "
             "Bitte den ursprünglichen WhatsApp-Export wählen."
@@ -85,8 +92,6 @@ def import_chat_export(export_dir: Path | str, chat_name: str) -> ImportResult:
 
 
 def merge_if_possible(chat_dir: Path, version_count: int) -> MergeResult | None:
-    """Mergt automatisch, sobald mindestens zwei Versionen existieren."""
-
     if version_count < 2:
         return None
 
@@ -97,14 +102,12 @@ def merge_if_possible(chat_dir: Path, version_count: int) -> MergeResult | None:
 
 
 def find_chat_file(export_dir: Path) -> Path | None:
-    """Sucht die WhatsApp-Textdatei direkt im Export-Ordner."""
-
     for name in CHAT_FILE_NAMES:
         candidate = export_dir / name
         if candidate.is_file():
             return candidate
 
-    for candidate in export_dir.glob("*.txt"):
+    for candidate in sorted(export_dir.glob("*.txt")):
         if candidate.is_file():
             return candidate
 
@@ -112,20 +115,12 @@ def find_chat_file(export_dir: Path) -> Path | None:
 
 
 def next_chat_version_path(chat_dir: Path) -> Path:
-    """
-    Liefert den nächsten freien Dateinamen für eine Chat-Version.
-
-    chat.txt existiert bereits? -> chat_version_2.txt
-    auch die?                  -> chat_version_3.txt usw.
-    """
-
     base_file = chat_dir / CHAT_FILE_NAME
 
     if not base_file.exists():
         return base_file
 
     version = 2
-
     while True:
         candidate = chat_dir / f"chat_version_{version}.txt"
         if not candidate.exists():
@@ -138,8 +133,6 @@ def import_media_files(
     chat_file: Path,
     target_media_dir: Path,
 ) -> None:
-    """Kopiert neue Medien in den einen Media-Ordner des Chats."""
-
     target_media_dir.mkdir(parents=True, exist_ok=True)
 
     for source_file in iter_media_candidates(export_dir, chat_file):
@@ -158,63 +151,78 @@ def import_media_files(
 
 
 def iter_media_candidates(export_dir: Path, chat_file: Path):
-    """Liefert alle Dateien, die als Medien importiert werden sollen."""
-
     for path in export_dir.rglob("*"):
         if not path.is_file():
             continue
-
         if path == chat_file:
             continue
-
         if path.name in CHAT_FILE_NAMES:
             continue
-
         if path.name.startswith("."):
             continue
-
         if "__MACOSX" in path.parts:
             continue
-
         if path.suffix.lower() in IGNORED_SUFFIXES:
             continue
-
         yield path
 
 
 def get_or_create_chat_dir(chats_root: Path, chat_name: str) -> Path:
-    """Nutzt den eingegebenen Chatnamen als Ordnernamen."""
+    """Nutzt den Chatnamen als Ordnernamen, plattformneutral."""
 
     folder_name = safe_folder_name(chat_name)
     if not folder_name:
         raise ImporterError(f"Ungültiger Chatname: {chat_name!r}")
 
+    existing = find_chat_dir_by_name(chats_root, folder_name)
+    if existing is not None:
+        return existing
+
     chat_dir = chats_root / folder_name
+    chat_dir.mkdir(parents=True, exist_ok=False)
 
-    if chat_dir.is_dir():
-        return chat_dir
-
-    chat_dir.mkdir(parents=True)
-
-    chat_name_file = chat_dir / "chat_name.txt"
-    chat_name_file.write_text(chat_name.strip(), encoding="utf-8")
+    (chat_dir / "chat_name.txt").write_text(chat_name.strip(), encoding="utf-8")
 
     return chat_dir
 
 
+def find_chat_dir_by_name(chats_root: Path, folder_name: str) -> Path | None:
+    """
+    Sucht einen bestehenden Chat-Ordner ohne Beachtung der Groß-/Kleinschreibung.
+
+    Nötig, weil Windows und macOS standardmäßig case-insensitive sind.
+    """
+
+    target = folder_name.casefold()
+
+    if not chats_root.is_dir():
+        return None
+
+    for candidate in chats_root.iterdir():
+        if candidate.is_dir() and candidate.name.casefold() == target:
+            return candidate
+
+    return None
+
+
 def safe_folder_name(chat_name: str) -> str:
-    """Macht aus einem Chatnamen einen gültigen Ordnernamen."""
+    """Erzeugt einen auf Windows und macOS gültigen Ordnernamen."""
 
-    name = chat_name.strip()
-    name = re.sub(r"[/:\\]", "-", name)
-    name = name.strip(". ")
+    name = unicodedata.normalize("NFC", chat_name).strip()
+    name = INVALID_FILENAME_CHARS.sub("-", name)
+    name = " ".join(name.split())
+    name = name.rstrip(". ")
 
-    return name
+    if not name:
+        return ""
+
+    if name.upper() in RESERVED_WINDOWS_NAMES:
+        name = f"{name}_chat"
+
+    return name[:MAX_FOLDER_NAME_LENGTH].rstrip(". ")
 
 
 def count_existing_versions(chat_dir: Path) -> int:
-    """Zählt chat.txt plus alle chat_version_-Dateien."""
-
     count = 0
 
     if (chat_dir / CHAT_FILE_NAME).is_file():

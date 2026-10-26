@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-
-from app.models import Attachment, Message
 
 # Beispiel: [05.12.24, 10:18:05] Theresa Rosenbaum: Text
 MESSAGE_START = re.compile(
@@ -24,6 +23,38 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".gif", ".webp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".3gp"}
 AUDIO_SUFFIXES = {".opus", ".mp3", ".m4a", ".wav", ".aac", ".ogg"}
 DOCUMENT_SUFFIXES = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
+
+
+@dataclass
+class Attachment:
+    """Eine Mediendatei, die in einer Nachricht referenziert wird."""
+
+    filename: str
+    path: Path | None
+    kind: str
+
+    @property
+    def exists(self) -> bool:
+        return self.path is not None and self.path.is_file()
+
+
+@dataclass
+class Message:
+    """Eine einzelne Chat-Nachricht."""
+
+    timestamp: datetime
+    sender: str
+    text: str
+    source_file: Path
+    attachments: list[Attachment] = field(default_factory=list)
+
+    @property
+    def is_own_message(self) -> bool:
+        return self.sender == "Du"
+
+    @property
+    def has_media(self) -> bool:
+        return bool(self.attachments)
 
 
 def clean_text(value: str) -> str:
@@ -56,8 +87,8 @@ def parse_chat_file(chat_path: Path) -> list[Message]:
     """
     Liest eine WhatsApp-Textdatei und gibt alle Nachrichten zurück.
 
-    Mehrzeilige Nachrichten werden korrekt zusammengeführt:
-    Eine neue Nachricht beginnt erst wieder mit einem Zeitstempel.
+    Mehrzeilige Nachrichten werden zusammengeführt: Eine neue Nachricht
+    beginnt erst wieder mit einem Zeitstempel am Zeilenanfang.
     """
 
     if not chat_path.is_file():
@@ -90,7 +121,6 @@ def parse_chat_file(chat_path: Path) -> list[Message]:
                 body = match["body"]
             else:
                 if current is None:
-                    # Zeilen vor der ersten Nachricht ignorieren
                     continue
                 body = line
 
@@ -131,8 +161,8 @@ def find_media_file(filename: str, chat_dir: Path) -> Path | None:
     """
     Sucht eine Mediendatei im Chat-Ordner.
 
-    Reihenfolge entspricht der Archivstruktur:
-    Media/ -> media/ -> direkt im Chat-Ordner
+    Reihenfolge: Media/ -> media/ -> direkt im Chat-Ordner,
+    danach als Sicherheitsnetz irgendwo im Chat-Ordner.
     """
 
     candidates = [
@@ -145,7 +175,6 @@ def find_media_file(filename: str, chat_dir: Path) -> Path | None:
         if candidate.is_file():
             return candidate
 
-    # Sicherheitsnetz: irgendwo im Chat-Ordner suchen
     try:
         return next(chat_dir.rglob(filename), None)
     except OSError:
